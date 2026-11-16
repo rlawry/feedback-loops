@@ -171,6 +171,60 @@ function sun(ctx, x, y, r, a) {
 }
 const SKIN = [205, 213, 228], COLD = [120, 165, 255], HOT = [255, 85, 85];
 
+
+/* ============ circulation loop shared by H and J ============ */
+const UH = .3, UP = .2, UIV = .9;            // hole, legs pouch, IV entry (positions along the loop)
+function loopGeom() { return { cx: W * .45, cy: H * .47, A: Math.min(W * .3, H * .62), B: H * .29 }; }
+function rawPt(u, g) { const th = u * TAU, c = Math.cos(th), s = Math.sin(th), e = .4;
+  return { x: g.cx + g.A * Math.sign(c) * Math.pow(Math.abs(c), e), y: g.cy + g.B * Math.sign(s) * Math.pow(Math.abs(s), e) }; }
+let LT = null, LTkey = '';
+function loopTable(g) { const key = [g.cx, g.cy, g.A, g.B].join(','); if (key === LTkey) return LT;
+  const n = 600, pts = [], cum = [0]; for (let i = 0; i <= n; i++) { pts.push(rawPt(i / n, g)); if (i) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y)); }
+  LT = { pts, cum, total: cum[n], n }; LTkey = key; return LT; }
+function loopPt(u, g) { u = ((u % 1) + 1) % 1; const T = loopTable(g), s = u * T.total; let lo = 0, hi = T.n;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (T.cum[m] <= s) lo = m; else hi = m; }
+  const k = (s - T.cum[lo]) / ((T.cum[hi] - T.cum[lo]) || 1), a = T.pts[lo], b = T.pts[hi]; return { x: lerp(a.x, b.x, k), y: lerp(a.y, b.y, k) }; }
+function takeNearest(arr, u0) { let bi = -1, bd = 9; arr.forEach((u, i) => { let d = Math.abs(u - u0); d = Math.min(d, 1 - d); if (d < bd) { bd = d; bi = i; } }); return bi >= 0 ? arr.splice(bi, 1)[0] : null; }
+function spreadDots(us, flow, dt) {
+  const n = us.length; if (!n) return us;
+  const r = us.map(u => ((u % 1) + 1) % 1).sort((a, b) => a - b);
+  let off = 0; for (let i = 0; i < n; i++) off += r[i] - i / n; off /= n;
+  const k = Math.min(1, dt * 1.6);
+  return r.map((u, i) => (((u + flow * dt + (off + i / n - u) * k) % 1) + 1) % 1);
+}
+function tubeW(P) { return U * .07 * clamp(.15 + .85 * P * P, .12, 1.8); }
+function drawTube(ctx, g, P, dead) {
+  ctx.beginPath(); for (let i = 0; i <= 160; i++) { const q = loopPt(i / 160, g); i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); } ctx.closePath();
+  const w = tubeW(P);
+  ctx.lineJoin = 'round'; ctx.strokeStyle = dead ? '#555b66' : 'rgba(255,140,160,.85)'; ctx.lineWidth = w + 7; ctx.stroke();
+  ctx.strokeStyle = dead ? '#23262d' : '#3a0d18'; ctx.lineWidth = w; ctx.stroke();
+}
+function drawDots(ctx, g, us, a = 1, col = '#ff4d6d') { for (const u of us) { const q = loopPt(u, g); shape(ctx, 'rbc', q.x, q.y, U * .0105, col, a); } }
+function gauge(ctx, P, dead) {
+  const r = U * .1, x = W - U * .15, y = H * .58, top = 1.6, a0 = Math.PI * .75, a1 = Math.PI * 2.25;
+  const ang = v => a0 + (a1 - a0) * clamp(v / top, 0, 1);
+  ctx.fillStyle = '#141d30'; ctx.strokeStyle = '#cfd8e3'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = 'rgba(207,216,227,.55)'; ctx.lineWidth = 2;
+  for (let v = 0; v <= top + 1e-6; v += .2) { const a = ang(v); ctx.beginPath(); ctx.moveTo(x + Math.cos(a) * r * .78, y + Math.sin(a) * r * .78); ctx.lineTo(x + Math.cos(a) * r * .9, y + Math.sin(a) * r * .9); ctx.stroke(); }
+  ctx.strokeStyle = dead ? '#555b66' : '#ff4d6d'; ctx.lineWidth = r * .14; ctx.lineCap = 'butt';
+  ctx.beginPath(); ctx.arc(x, y, r * .66, a0, ang(P)); ctx.stroke();
+  const sa = ang(1); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3; ctx.setLineDash([4, 3]);
+  ctx.beginPath(); ctx.moveTo(x + Math.cos(sa) * r * .5, y + Math.sin(sa) * r * .5); ctx.lineTo(x + Math.cos(sa) * r * 1.12, y + Math.sin(sa) * r * 1.12); ctx.stroke(); ctx.setLineDash([]);
+  const na = ang(P); ctx.strokeStyle = dead ? '#9aa0aa' : '#ffffff'; ctx.lineWidth = 3.5; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(na) * r * .82, y + Math.sin(na) * r * .82); ctx.stroke();
+  dot(ctx, x, y, r * .1, '#cfd8e3');
+}
+function heartShape(ctx, hx, hy, z, col) {
+  ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(hx, hy + z);
+  ctx.bezierCurveTo(hx - z * 1.6, hy - z * .1, hx - z * .9, hy - z * 1.3, hx, hy - z * .5);
+  ctx.bezierCurveTo(hx + z * .9, hy - z * 1.3, hx + z * 1.6, hy - z * .1, hx, hy + z); ctx.fill();
+}
+function puddleY() { return H * .9; }
+function drawPuddle(ctx, g, lost, dead) { if (lost <= 0) return; const q = loopPt(UH, g), rx = U * .03 * Math.sqrt(lost), ry = U * .012 * Math.sqrt(lost) * .6 + 3;
+  ctx.fillStyle = dead ? '#4a2a30' : '#a4161a'; ctx.beginPath(); ctx.ellipse(q.x, puddleY(), rx, ry, 0, 0, TAU); ctx.fill(); }
+function trimDrops(drops) { const py = puddleY() / H; drops.l = drops.l.filter(d => d.y < py); }
+function bleedDrop(drops, g) { const q = loopPt(UH, g); drops.add(q.x / W + (Math.random() - .5) * .01, q.y / H + .02, (Math.random() - .5) * .04, .05, '#e63946', .0105, 2.2, .7, 'rbc'); }
+
 /* ============ simulations ============ */
 const SIMS = [
 
@@ -188,7 +242,7 @@ const SIMS = [
     const sink = this.ex > ins * .8 ? P(.5, .82) : P(.8, .8);
     this.pool.adjust(this.g * 24, src, sink, dt, 25); this.pool.update(dt);
     this.e1 = emit(this.e1, ins * 10, dt, () => this.sig.emit(P(.2, .8), P(.78, .8), C.sig));
-    this.e2 = emit(this.e2, glu * 10, dt, () => this.sig.emit(P(.2, .8), P(.82, .2), '#ff5fd2'));
+    this.e2 = emit(this.e2, glu * 10, dt, () => this.sig.emit(P(.2, .8), P(.82, .2), C.sig));
     this.sig.update(dt); },
   draw(ctx) { bg(ctx); const R = this.c.R, t = this.t;
     link(ctx, P(.2, .8), P(.8, .8)); link(ctx, P(.2, .8), P(.82, .2));
@@ -205,7 +259,7 @@ const SIMS = [
     this.pool.draw(ctx); this.sig.draw(ctx); } },
 
 /* B — blood clotting (positive) */
-{ type: 'P', col: '#c3f584', glyph: 'dot', lo: 0, hi: 1.15, sp: 0,
+{ type: 'P', col: '#c3f584', glyph: 'dot', lo: -.1, hi: 1.15, sp: 0,
   btns: [['cut', s => { if (!s.cut) { s.cut = true; s.p = .03; s.open = 1; s.sealed = false; } }]],
   init() { this.cut = false; this.p = 0; this.open = 0; this.sealed = false; this.t = 0;
     this.rbc = new Pool({ rx: 0, ry: .48, rw: 1, rh: .14, col: '#e63946', sh: 'rbc', vx: .09, sz: .011 }); this.rbc.fill(30);
@@ -343,7 +397,7 @@ const SIMS = [
     this.pool.draw(ctx); this.drops.draw(ctx); this.sig.draw(ctx); } },
 
 /* F — childbirth, abstract (positive) */
-{ type: 'P', col: '#ff8fab', glyph: 'ring', lo: 0, hi: 1.3, sp: 0,
+{ type: 'P', col: '#ff8fab', glyph: 'ring', lo: -.1, hi: 1.3, sp: 0,
   btns: [['pulse', s => { if (!s.on || s.done) { s.on = true; s.amp = .15; s.p = 0; s.done = false; s.post = 0; s.ph = 0; } }]],
   init() { this.on = false; this.amp = 0; this.p = 0; this.done = false; this.post = 0; this.ph = 0; this.sq = 0; this.t = 0;
     this.sig = new Sig(); this.e1 = 0; this.e2 = 0; },
@@ -355,7 +409,7 @@ const SIMS = [
     else { this.amp *= Math.exp(-dt * 1.2); this.post += dt; if (this.amp < .01) { this.on = false; this.amp = 0; } } },
   v() { return this.amp * this.sq; },
   anim(dt) { this.t += dt; const a = this.amp * this.sq;
-    if (!this.done) this.e1 = emit(this.e1, a * 7, dt, () => this.sig.emit(P(.5, .45 + .3 * U / H), P(.85, .2), C.rec, .7));
+    if (!this.done) this.e1 = emit(this.e1, a * 7, dt, () => this.sig.emit(P(.5, .45 + .3 * U / H), P(.85, .2), C.sig, .7));
     this.e2 = emit(this.e2, this.done ? 0 : a * 8, dt, () => this.sig.emit(P(.85, .2), P(Math.random() < .5 ? .5 - .3 * U / W : .5 + .3 * U / W, .45), C.sig, .8));
     this.sig.update(dt); },
   draw(ctx) { bg(ctx); const a = this.amp * this.sq, cx = X(.5), cy = Y(.45), r = U * .3 * (1 - .12 * a), g = .36;
@@ -410,41 +464,59 @@ const SIMS = [
     this.sig.draw(ctx); this.drops.draw(ctx); } },
 
 /* H — blood pressure (negative) */
-{ type: 'N', col: '#ff4d6d', glyph: 'dot', lo: .5, hi: 1.4, sp: 1,
-  btns: [['stand', s => { s.dS -= 1.0; s.standT = 1; }], ['drop', s => { s.dB -= .7; s.bleedT = 3; }]],
-  init() { this.Pp = 1; this.dS = 0; this.dB = 0; this.standT = 0; this.bleedT = 0; this.ph = 0; this.t = 0; this.pose = 0;
-    this.k = PI({ Kp: 2.5, Ki: 1.2, tau: .5 }); this.u = []; for (let i = 0; i < 40; i++) this.u.push(i / 40);
-    this.drops = new Drops(); this.sig = new Sig(); this.e1 = 0; this.e2 = 0; },
-  step(dt) { this.dS *= Math.exp(-dt / 2.5); this.dB *= Math.exp(-dt / 4);
-    piStep(this.k, this.Pp - 1, dt); this.Pp = clamp(this.Pp + (this.dS + this.dB - this.k.R) * dt, .4, 1.5); },
-  v() { return this.Pp; },
-  anim(dt) { this.t += dt; const R = clamp(this.k.R, -1.2, 1.2), HR = clamp(1 - .8 * R, .4, 2.2);
-    this.ph += dt * 1.1 * HR; this.u = this.u.map(u => (u + dt * .12 * this.Pp) % 1);
-    this.standT = Math.max(0, this.standT - dt * .25); this.bleedT = Math.max(0, this.bleedT - dt);
-    this.pose = lerp(this.pose, this.standT > 0 ? 1 : 0, dt * 3);
-    this.e1 = emit(this.e1, this.bleedT > 0 ? 12 : 0, dt, () => this.drops.add(.55 + (Math.random() - .5) * .02, .8, (Math.random() - .5) * .05, .1, '#e63946', .01, 1.5, .6));
-    const hx = .55 - .3 * U / W, vx = .55 + .3 * U / W;
-    this.e2 = emit(this.e2, Math.max(0, -R) * 8, dt, () => this.sig.emit(P(.88, .12), Math.random() < .5 ? P(hx, .5) : P(vx, .5), C.sig, .9));
-    this.drops.update(dt); this.sig.update(dt); },
-  draw(ctx) { bg(ctx); const R = clamp(this.k.R, -1.2, 1.2), cx = .55, cy = .5, a = .3 * U / W, b = .3 * U / H;
-    link(ctx, P(cx, cy - b), P(.88, .12)); link(ctx, P(.88, .12), P(cx - a, .5));
-    const lw = U * .06 * (1 + .35 * R);
-    eff(ctx, cx + a, .5, .07, Math.max(0, -R) * 1.2);
-    ctx.strokeStyle = 'rgba(150,25,45,.6)'; ctx.lineWidth = lw + 6; ctx.beginPath(); ctx.ellipse(X(cx), Y(cy), a * W, b * H, 0, 0, TAU); ctx.stroke();
-    ctx.strokeStyle = 'rgba(80,10,25,1)'; ctx.lineWidth = lw; ctx.stroke();
-    const sag = this.pose * .04;
-    for (const u of this.u) { const th = u * TAU, x = cx + a * Math.cos(th), y = cy + b * Math.sin(th) + sag * (1 + Math.sin(th)) / 2 * (U / H);
-      shape(ctx, 'rbc', X(x), Y(y), U * .01, '#ff4d6d'); }
-    rec(ctx, cx, cy - b, .03, Math.abs(this.Pp - 1) * 3, this.t);
-    ctlNode(ctx, .88, .12, .035, Math.abs(R));
-    const beat = Math.pow(Math.max(0, Math.sin(TAU * this.ph)), 4), hs = .065 * (1 + .15 * beat);
-    eff(ctx, cx - a, .5, .09, Math.max(0, -R) * 1.2);
-    ctx.fillStyle = '#e63946'; ctx.beginPath(); const hx = X(cx - a), hy = Y(.5), z = hs * U;
-    ctx.moveTo(hx, hy + z); ctx.bezierCurveTo(hx - z * 1.6, hy - z * .1, hx - z * .9, hy - z * 1.3, hx, hy - z * .5);
-    ctx.bezierCurveTo(hx + z * .9, hy - z * 1.3, hx + z * 1.6, hy - z * .1, hx, hy + z); ctx.fill();
-    // posture figure
-    ctx.save(); ctx.translate(X(.1), Y(.7)); ctx.rotate(-Math.PI / 2 * (1 - this.pose)); ctx.strokeStyle = '#cfd8e3'; ctx.fillStyle = '#cfd8e3'; ctx.lineWidth = 3; ctx.lineCap = 'round';
-    const f = U * .05; ctx.beginPath(); ctx.arc(0, -f * 1.6, f * .3, 0, TAU); ctx.fill(); ctx.beginPath(); ctx.moveTo(0, -f * 1.3); ctx.lineTo(0, -f * .3); ctx.lineTo(-f * .3, f * .4); ctx.moveTo(0, -f * .3); ctx.lineTo(f * .3, f * .4); ctx.moveTo(-f * .4, -f); ctx.lineTo(f * .4, -f); ctx.stroke(); ctx.restore();
+{ type: 'N', col: '#ff4d6d', glyph: 'dot', lo: .6, hi: 1.3, sp: 1,
+  btns: [['stand', s => { s.stand = !s.stand; }], ['drop', s => { s.bleed += 8; }]],
+  init() { this.N0 = 48; this.u = []; for (let i = 0; i < this.N0; i++) this.u.push(i / this.N0);
+    this.pool = []; this.P = 1; this.HR = 1; this.tone = 1; this.k = PI({ Kp: 1.2, Ki: .6, tau: 1.2 });
+    this.stand = false; this.bleed = 0; this.lost = 0; this.a1 = 0; this.a2 = 0; this.ph = 0; this.t = 0; this.pose = 0;
+    this.drops = new Drops(); this.sig = new Sig(); this.e1 = 0; },
+  step(dt) { const g = loopGeom();
+    if (this.bleed > 0) { this.a1 += 4 * dt; while (this.a1 >= 1 && this.bleed > 0 && this.u.length) { this.a1--; this.bleed--; this.lost++; takeNearest(this.u, UH); bleedDrop(this.drops, g); } } else this.a1 = 0;
+    const tgt = this.stand ? 10 : 0; this.a2 = Math.min(2, this.a2 + 8 * dt);
+    while (this.a2 >= 1) { this.a2--;
+      if (this.pool.length < tgt && this.u.length) { takeNearest(this.u, UP); const th = Math.random() * TAU, r = Math.sqrt(Math.random()) * .75; this.pool.push({ ox: Math.cos(th) * r, oy: Math.sin(th) * r, k: 0 }); }
+      else if (this.pool.length > tgt) { this.pool.pop(); this.u.push(UP); }
+      else break; }
+    const V = this.u.length / this.N0, R = this.k.R;
+    this.HR = clamp(1 - .7 * R, .4, 2.2); this.tone = clamp(1 - .35 * R, .7, 1.6);
+    this.P += (Math.pow(V, 1.5) * (.4 + .6 * this.HR) * this.tone - this.P) * dt * 3;
+    piStep(this.k, this.P - 1, dt); },
+  v() { return this.P; },
+  anim(dt) { this.t += dt; this.ph += dt * 1.1 * this.HR;
+    this.u = spreadDots(this.u, .075 * this.P, dt);
+    for (const q of this.pool) q.k = Math.min(1, q.k + dt * 3);
+    this.pose = lerp(this.pose, this.stand ? 1 : 0, dt * 4);
+    const g = loopGeom(), hq = loopPt(.5, g);
+    this.e1 = emit(this.e1, Math.abs(this.k.R) * 8, dt, () => {
+      const to = Math.random() < .5 ? P(hq.x / W, hq.y / H) : (() => { const b = loopPt([.7, .8, .9, .05][Math.floor(Math.random() * 4)], g); return P(b.x / W, b.y / H); })();
+      this.sig.emit(P(.1, .14), to, C.sig, .9); });
+    this.drops.update(dt); trimDrops(this.drops); this.sig.update(dt); },
+  draw(ctx) { bg(ctx); const g = loopGeom(), Pp = this.P, R = this.k.R, t = this.t;
+    const bq = loopPt(.62, g), hq = loopPt(.5, g);
+    link(ctx, P(bq.x / W, bq.y / H), P(.1, .14)); link(ctx, P(.1, .14), P(hq.x / W, hq.y / H));
+    // legs pouch (where blood pools when standing)
+    const pq = loopPt(UP, g), px = pq.x, py = pq.y + U * .13, rx = U * .085, ry = U * .065;
+    ctx.strokeStyle = 'rgba(255,140,160,.85)'; ctx.lineWidth = U * .03 + 7; ctx.beginPath(); ctx.moveTo(pq.x, pq.y); ctx.lineTo(px, py - ry); ctx.stroke();
+    ctx.strokeStyle = '#3a0d18'; ctx.lineWidth = U * .03; ctx.stroke();
+    ctx.fillStyle = '#3a0d18'; ctx.strokeStyle = 'rgba(255,140,160,.85)'; ctx.lineWidth = 3.5; ctx.beginPath(); ctx.ellipse(px, py, rx, ry, 0, 0, TAU); ctx.fill(); ctx.stroke();
+    for (const q of this.pool) shape(ctx, 'rbc', lerp(pq.x, px + q.ox * rx, q.k), lerp(pq.y, py + q.oy * ry, q.k), U * .0105, '#ff4d6d');
+    drawPuddle(ctx, g, this.lost, false);
+    drawTube(ctx, g, Pp, false);
+    // vessel-muscle bands (effector): tighten when vessels narrow
+    const ta = clamp((this.tone - 1) * 5, 0, 1);
+    if (ta > .03) for (const u of [.7, .8, .9, .05]) { const a = loopPt(u, g), b = loopPt(u + .003, g), dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L, h = tubeW(Pp) * .5 + 9;
+      ctx.strokeStyle = rgba(C.eff, ta); ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(a.x - nx * h, a.y - ny * h); ctx.lineTo(a.x + nx * h, a.y + ny * h); ctx.stroke(); }
+    drawDots(ctx, g, this.u);
+    if (this.bleed > 0) { const q = loopPt(UH, g); ctx.fillStyle = '#12060a'; ctx.fillRect(q.x - U * .012, q.y, U * .024, tubeW(Pp) * .5 + 6); }
+    const beat = Math.pow(Math.max(0, Math.sin(TAU * this.ph)), 4);
+    eff(ctx, hq.x / W, hq.y / H, .085, clamp(Math.abs(this.HR - 1) * 2.5, 0, 1));
+    heartShape(ctx, hq.x, hq.y, U * .07 * (1 + .14 * beat), '#e63946');
+    rec(ctx, bq.x / W, bq.y / H, .03, Math.abs(Pp - 1) * 4, t);
+    ctlNode(ctx, .1, .14, .035, Math.abs(R));
+    gauge(ctx, Pp, false);
+    // posture figure: lying flat or standing
+    ctx.save(); ctx.translate(X(.07), Y(.74)); ctx.rotate(-Math.PI / 2 * (1 - this.pose)); ctx.strokeStyle = '#cfd8e3'; ctx.fillStyle = '#cfd8e3'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    const f = U * .06; ctx.beginPath(); ctx.arc(0, -f * 1.6, f * .3, 0, TAU); ctx.fill(); ctx.beginPath(); ctx.moveTo(0, -f * 1.3); ctx.lineTo(0, -f * .3); ctx.lineTo(-f * .3, f * .4); ctx.moveTo(0, -f * .3); ctx.lineTo(f * .3, f * .4); ctx.moveTo(-f * .4, -f); ctx.lineTo(f * .4, -f); ctx.stroke(); ctx.restore();
     this.drops.draw(ctx); this.sig.draw(ctx); } },
 
 /* I — altitude / red blood cells (negative) */
@@ -480,40 +552,52 @@ const SIMS = [
 
 /* J — shock spiral, abstract (positive) */
 { type: 'P', col: '#ff4d6d', glyph: 'dot', lo: 0, hi: 1.3, sp: 1,
-  btns: [['drop', s => { if (s.leakT <= 0) s.leakT = 3; }], ['refill', s => s.refill = 1]],
-  init() { this.V = 1; this.S = 1; this.leakT = 0; this.refill = 0; this.ph = 0; this.t = 0; this.dead = false;
-    this.u = []; for (let i = 0; i < 40; i++) this.u.push(i / 40);
-    this.drops = new Drops(); this.sig = new Sig(); this.e1 = 0; this.e2 = 0; this.e3 = 0; },
-  P() { return this.V * this.S; },
-  step(dt) { if (this.dead) return; const p = this.P();
-    if (this.leakT > 0) { this.V -= .05 * dt; this.leakT -= dt; }
-    if (this.refill) { this.V += .6 * (1 - this.V) * dt; this.S += .8 * (1 - this.S) * dt; this.leakT = 0;
-      if (p > .97 && this.V > .97) { this.refill = 0; this.V = Math.max(this.V, 1); } }
-    else if (p < .999) this.S += 1.2 * (p - 1) * dt;
-    this.V = clamp(this.V, 0, 1); this.S = clamp(this.S, 0, 1.05);
-    if (!this.refill && this.P() < .06) { this.dead = true; this.S = 0; } },
-  v() { return this.P(); },
-  anim(dt) { this.t += dt; const p = this.P();
-    if (this.dead) { this.sig.l = []; this.drops.update(dt); return; }
-    this.ph += dt * (.5 + .7 * this.S); this.u = this.u.map(u => (u + dt * .12 * p) % 1);
-    const n = Math.round(this.V * 40); while (this.u.length > n) this.u.pop(); while (this.u.length < n) this.u.push(Math.random());
-    this.e1 = emit(this.e1, this.leakT > 0 ? 14 : 0, dt, () => this.drops.add(.55 + (Math.random() - .5) * .02, .79, (Math.random() - .5) * .05, .12, '#ff4d6d', .01, 1.5, .6));
-    this.e2 = emit(this.e2, this.refill ? 14 : 0, dt, () => this.drops.add(.55 + (Math.random() - .5) * .02, .0, 0, .3, '#ff4d6d', .01, .55, 0));
-    this.e3 = emit(this.e3, !this.refill && p < .97 ? (1 - p) * 10 : 0, dt, () => this.sig.emit(P(.85, .48), P(.27, .48), C.rec, .7));
-    this.drops.update(dt); this.sig.update(dt); },
-  draw(ctx) { bg(ctx); const p = this.P(), cx = .55, cy = .48, a = .3 * U / W, b = .3 * U / H;
-    link(ctx, P(.85, .48), P(.27, .48));
-    ctx.strokeStyle = 'rgba(150,25,45,.6)'; ctx.lineWidth = U * .06 + 6; ctx.beginPath(); ctx.ellipse(X(cx), Y(cy), a * W, b * H, 0, 0, TAU); ctx.stroke();
-    ctx.strokeStyle = 'rgba(80,10,25,1)'; ctx.lineWidth = U * .06; ctx.stroke();
-    if (this.leakT > 0) { ctx.fillStyle = '#2a0b12'; ctx.fillRect(X(cx) - U * .015, Y(cy + b) - U * .02, U * .03, U * .04); }
-    for (const u of this.u) { const th = u * TAU; shape(ctx, 'rbc', X(cx + a * Math.cos(th)), Y(cy + b * Math.sin(th)), U * .01, '#ff4d6d', .4 + .6 * clamp(p, 0, 1)); }
-    if (this.dead) { deadRec(ctx, cx + a, cy, .03); dot(ctx, X(cx - a), Y(cy), .075 * U, '#3a3f4a'); ring(ctx, cx - a, cy, .075, '#6b7280', 3, .8);
+  btns: [['drop', s => { if (s.bleed <= 0) s.bleed = 12; }], ['refill', s => { s.refill = true; }]],
+  init() { this.N0 = 48; this.u = []; for (let i = 0; i < this.N0; i++) this.u.push(i / this.N0);
+    this.S = 1; this.P = 1; this.bleed = 0; this.lost = 0; this.refill = false; this.a1 = 0; this.a2 = 0; this.ph = 0; this.t = 0; this.dead = false;
+    this.drips = []; this.drops = new Drops(); this.sig = new Sig(); this.e3 = 0; },
+  ivPts(g) { const e = loopPt(UIV, g), bx = W - U * .24, by = H * .13; return { e, bx, by }; },
+  step(dt) { if (this.dead) return; const g = loopGeom();
+    if (this.bleed > 0) { this.a1 += 4 * dt; while (this.a1 >= 1 && this.bleed > 0 && this.u.length) { this.a1--; this.bleed--; this.lost++; takeNearest(this.u, UH); bleedDrop(this.drops, g); } } else this.a1 = 0;
+    if (this.refill) { const pending = this.u.length + this.drips.length;
+      if (pending < this.N0) { this.a2 += 8 * dt; while (this.a2 >= 1 && this.u.length + this.drips.length < this.N0) { this.a2--; this.drips.push({ k: 0 }); } }
+      else if (!this.drips.length) { this.refill = false; this.a2 = 0; } }
+    for (const d of this.drips) d.k += dt * 1.4;
+    while (this.drips.length && this.drips[0].k >= 1) { this.drips.shift(); this.u.push(UIV); }
+    const V = this.u.length / this.N0;
+    this.P += (Math.pow(V, 1.5) * this.S - this.P) * dt * 3;
+    this.S = clamp(this.S + .35 * (this.P - .68) * dt, 0, 1);
+    if (this.P < .06) { this.dead = true; this.S = 0; this.drips = []; this.refill = false; } },
+  v() { return this.P; },
+  anim(dt) { this.t += dt; if (this.dead) { this.sig.l = []; this.drops.update(dt); trimDrops(this.drops); return; }
+    this.ph += dt * (.5 + .7 * this.S);
+    this.u = spreadDots(this.u, .075 * this.P, dt);
+    const g = loopGeom(), rq = loopPt(.62, g), pq = loopPt(.5, g);
+    this.e3 = emit(this.e3, this.P < .95 ? (1 - this.P) * 10 : 0, dt, () => this.sig.emit(P(rq.x / W, rq.y / H), P(pq.x / W, pq.y / H), C.sig, .8));
+    this.drops.update(dt); trimDrops(this.drops); this.sig.update(dt); },
+  draw(ctx) { bg(ctx); const g = loopGeom(), Pp = this.P, dead = this.dead, t = this.t;
+    drawPuddle(ctx, g, this.lost, dead);
+    const rq = loopPt(.62, g), pq = loopPt(.5, g);
+    link(ctx, P(rq.x / W, rq.y / H), P(pq.x / W, pq.y / H));
+    // IV bag and line
+    const iv = this.ivPts(g);
+    if (this.refill || this.drips.length) {
+      ctx.strokeStyle = '#cfd8e3'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(iv.bx, iv.by + U * .07); ctx.lineTo(iv.e.x, iv.e.y); ctx.stroke();
+      ctx.fillStyle = 'rgba(230,57,70,.8)'; ctx.strokeStyle = '#cfd8e3'; ctx.lineWidth = 2.5; ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(iv.bx - U * .04, iv.by - U * .06, U * .08, U * .12, U * .02); else ctx.rect(iv.bx - U * .04, iv.by - U * .06, U * .08, U * .12); ctx.fill(); ctx.stroke();
+      for (const d of this.drips) shape(ctx, 'rbc', lerp(iv.bx, iv.e.x, d.k), lerp(iv.by + U * .07, iv.e.y, d.k), U * .0105, '#ff4d6d');
+    }
+    drawTube(ctx, g, Pp, dead);
+    drawDots(ctx, g, this.u, 1, dead ? '#6b5560' : '#ff4d6d');
+    if (this.bleed > 0) { const q = loopPt(UH, g); ctx.fillStyle = '#12060a'; ctx.fillRect(q.x - U * .012, q.y, U * .024, tubeW(Pp) * .5 + 6); }
+    if (dead) { deadRec(ctx, rq.x / W, rq.y / H, .03); dot(ctx, pq.x, pq.y, U * .075, '#3a3f4a'); ring(ctx, pq.x / W, pq.y / H, .075, '#6b7280', 3, .8); gauge(ctx, Pp, true);
       this.drops.draw(ctx); ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(0, 0, W, H); return; }
-    rec(ctx, cx + a, cy, .03, Math.max(0, 1 - p) * 3, this.t);
+    rec(ctx, rq.x / W, rq.y / H, .03, Math.max(0, 1 - Pp) * 3, t);
     const beat = Math.pow(Math.max(0, Math.sin(TAU * this.ph)), 4), pr = .075 * (1 + .25 * beat * this.S);
-    eff(ctx, cx - a, cy, .1, this.S * .9);
-    dot(ctx, X(cx - a), Y(cy), pr * U, rgb(mix([70, 25, 35], [255, 77, 109], clamp(this.S, 0, 1))));
-    ring(ctx, cx - a, cy, pr, C.eff, 3, clamp(this.S, 0, 1));
+    eff(ctx, pq.x / W, pq.y / H, .1, this.S * .9);
+    dot(ctx, pq.x, pq.y, pr * U, rgb(mix([70, 25, 35], [255, 77, 109], clamp(this.S, 0, 1))));
+    ring(ctx, pq.x / W, pq.y / H, pr, C.eff, 3, clamp(this.S, 0, 1));
+    gauge(ctx, Pp, false);
     this.drops.draw(ctx); this.sig.draw(ctx); } },
 ];
 function glu(R) { return Math.max(0, -R) * 1.5; }
